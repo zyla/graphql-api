@@ -20,6 +20,8 @@ module GraphQL.Resolver
   , Defaultable(..)
   , Result(..)
   , unionValue
+  , RunFieldsHandler
+  , RunFieldsType
   ) where
 
 -- TODO (probably incomplete, the spec is large)
@@ -326,11 +328,14 @@ type family RunFieldsType (m :: Type -> Type) (a :: [Type]) = (r :: Type) where
   RunFieldsType m '[a :> b] = a :> b
   RunFieldsType m ((API.Field ksJ t) ': rest) = API.Field ksJ t :<> RunFieldsType m rest
   RunFieldsType m ((a :> b) ': rest) = (a :> b) :<> RunFieldsType m rest
+  RunFieldsType m '[] = ()
   RunFieldsType m a = TypeError (
     'Text "All field entries in an Object must be Field or Argument :> Field. Got: " ':<>: 'ShowType a)
 
 -- Match the three possible cases for Fields (see also RunFieldsType)
 type family RunFieldsHandler (m :: Type -> Type) (a :: Type) = (r :: Type) where
+  RunFieldsHandler m () = ()
+  RunFieldsHandler m (f :<> ()) = FieldHandler m (FieldResolverDispatchType f)
   RunFieldsHandler m (f :<> fs) = FieldHandler m (FieldResolverDispatchType f) :<> RunFieldsHandler m fs
   RunFieldsHandler m (API.Field ksL t) = FieldHandler m (FieldResolverDispatchType (API.Field ksL t))
   RunFieldsHandler m (a :> b) = FieldHandler m (FieldResolverDispatchType (a :> b))
@@ -348,10 +353,14 @@ class RunFields m a where
   -- within the handler.
   runFields :: RunFieldsHandler m a -> Field Value -> m ResolveFieldResult
 
+instance (RunFields m f, RunFieldsHandler m f ~ RunFieldsHandler m (f :<> ())) => RunFields m (f :<> ()) where
+  runFields handler field = runFields @m @f handler field
+
 instance forall f fs m dispatchType.
          ( BuildFieldResolver m dispatchType
          , dispatchType ~ FieldResolverDispatchType f
          , RunFields m fs
+         , RunFieldsHandler m (f :<> fs) ~ (FieldHandler m dispatchType :<> RunFieldsHandler m fs)
          , KnownSymbol (FieldName dispatchType)
          , Monad m
          ) => RunFields m (f :<> fs) where
